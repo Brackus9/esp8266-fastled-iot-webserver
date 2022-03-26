@@ -120,7 +120,6 @@ extern "C" {
     int t_offset = 1;                                   // offset added to the time from the ntp server
     bool updateColorsEverySecond = false;               // if set to false it will update colors every minute (time patterns only)
     const int NTP_PACKET_SIZE = 48;
-    bool switchedTimePattern = true;
     #define NUM_LEDS 30
     #define Digit1 0
     #define Digit2 7
@@ -352,9 +351,8 @@ if you have connected the ring first it should look like this: const int twpOffs
     int hours = 0; int mins = 0; int secs = 0;
     unsigned int localPortTime = 2390;
     unsigned long update_timestamp = 0;
-    unsigned long last_diff = 0;
     unsigned long ntp_timestamp = 0;
-
+    bool update_time_display = true; // global variable to update leds only when time changes
 #elif LED_DEVICE_TYPE == 3
     #define NUM_LEDS      (LINE_COUNT * LEDS_PER_LINE)
     #define PACKET_LENGTH LEDS_PER_LINE
@@ -1226,9 +1224,6 @@ void setup() {
 
     webServer.on("/pattern", []() {
         String value = webServer.arg("value");
-        #if LED_DEVICE_TYPE == 2
-        switchedTimePattern = true;
-        #endif
         setPattern(value.toInt());
         sendInt(currentPatternIndex);
         });
@@ -1471,6 +1466,10 @@ void loop() {
     }
 
     updateHue();
+        #if LED_DEVICE_TYPE == 2
+    //manage time 
+    KeepTrackOfTime();
+    #endif
 
     if (autoplay && (millis() > autoPlayTimeout)) {
         adjustPattern(true);
@@ -1488,13 +1487,13 @@ void loop() {
 
     // init time
     // FIXME: use this to keep time updated. Don't rely on pattern to do this.
-#if LED_DEVICE_TYPE == 2
-    EVERY_N_MILLISECONDS(200) {
-        if (wifiConnected && ntp_timestamp == 0) {
-            GetTime();
-        }
-    }
-#endif
+//#if LED_DEVICE_TYPE == 2
+//    EVERY_N_MILLISECONDS(200) {
+//        if (wifiConnected && ntp_timestamp == 0) {
+//            GetTime();
+//       }
+//    }
+//#endif
 
     // call to save config if config has changed
     saveConfig();
@@ -1689,6 +1688,9 @@ void setPower(uint8_t value)
 
     cfg.power = power;
     setConfigChanged();
+#if LED_DEVICE_TYPE == 2
+    update_time_display = true;
+#endif
     SERIAL_DEBUG_LNF("Setting: power %s", (power == 0) ? "off" : "on")
     broadcastInt("power", power);
 }
@@ -1774,6 +1776,9 @@ void setPattern(uint8_t value)
         setConfigChanged();
     }
 
+#if LED_DEVICE_TYPE == 2
+    update_time_display = true;
+#endif
     SERIAL_DEBUG_LNF("Setting: pattern: %s", patterns[currentPatternIndex].name.c_str())
 
     broadcastInt("pattern", currentPatternIndex);
@@ -2789,7 +2794,7 @@ void PrintTime() {
 }
 
 
-bool GetTime() {
+void GetTime() {
     static bool ntp_package_sent = false;
     static unsigned long last_package_sent = 0;
 
@@ -2799,13 +2804,13 @@ bool GetTime() {
         sendNTPpacket(timeServerIP);
         ntp_package_sent = true;
         last_package_sent = millis();
-        return false;
+        return;
     }
 
     if (ntp_package_sent) {
         int cb = udpTime.parsePacket();
         if (!cb) {
-            return false;
+            return;
         }
 
         SERIAL_DEBUG_LNF("packet received, length=%lu", cb)
@@ -2827,14 +2832,14 @@ bool GetTime() {
         secs = (epoch % 60);
 
         PrintTime();
-        return true;
+        update_time_display = true;
+        return;
     }
 }
 
 bool shouldUpdateNTP()
-{
-    if (switchedTimePattern || (millis() - ntp_timestamp) > (NTP_REFRESH_INTERVAL_SECONDS * 1000)) {
-        switchedTimePattern = false;
+{ // update NTP every set interval and at startup
+    if ((millis() - ntp_timestamp) > (NTP_REFRESH_INTERVAL_SECONDS * 1000) || ntp_timestamp == 0) {
         return true;
     }
     return false;
@@ -2844,6 +2849,23 @@ bool shouldUpdateTime()
 {
     if ((millis() - update_timestamp) > (1000))return true;
     return false;
+}
+void KeepTrackOfTime()
+{
+    
+    if (shouldUpdateNTP())
+    {
+        GetTime();
+    }
+    if (shouldUpdateTime())
+    {
+        incrementTime();
+        if (updateColorsEverySecond)
+        {
+            update_time_display = true;
+        }
+    
+    }   
 }
 
 void DrawDots(int r, int g, int b, int hueMode)
@@ -2876,76 +2898,36 @@ void displayTime(CRGB x = CRGB(0, 0, 0))
 
 void displayTimeStatic()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (update_time_display)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            displayTime(solidColor);
-        }
+        displayTime(solidColor);
     }
 }
 
 void displayTimeRainbow()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (update_time_display)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime()  || fresh_update)
-        {
-            displayTime();
-        }
+        displayTime();
     }
 }
 
 void displayTimeColorful()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (update_time_display)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            CRGB x = CRGB(255, 0, 0);
-            DrawTime(x.r, x.g, x.b, 1);
-            DrawDots(x.r, x.g, x.b, 1);
-        }
-    }
-    else if (updateColorsEverySecond) {
         CRGB x = CRGB(255, 0, 0);
         DrawTime(x.r, x.g, x.b, 1);
         DrawDots(x.r, x.g, x.b, 1);
     }
+
+
 }
 
 void displayTimeGradient()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (update_time_display)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            CRGB x = CRGB(255, 0, 0);
-            DrawTime(x.r, x.g, x.b, 5);
-            DrawDots(x.r, x.g, x.b, 5);
-        }
-    }
-    else if(updateColorsEverySecond){
         CRGB x = CRGB(255, 0, 0);
         DrawTime(x.r, x.g, x.b, 5);
         DrawDots(x.r, x.g, x.b, 5);
@@ -2954,48 +2936,32 @@ void displayTimeGradient()
 
 void displayTimeGradientLarge()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (update_time_display)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            CRGB x = CRGB(255, 0, 0);
-            DrawTime(x.r, x.g, x.b, 3);
-            DrawDots(x.r, x.g, x.b, 3);
-        }
-    }
-    else if (updateColorsEverySecond) {
         CRGB x = CRGB(255, 0, 0);
         DrawTime(x.r, x.g, x.b, 3);
         DrawDots(x.r, x.g, x.b, 3);
     }
 }
 
-bool incrementTime()
+void incrementTime()
 {
-    bool retval = false;
+    
     secs++;
     update_timestamp = millis();
     if (secs >= 60)
     {
         secs -= 60;
         mins++;
-        retval = true;
+        update_time_display = true;
     }
     if (mins >= 60)
     {
         mins -= 60;
         hours++;
-        retval = true;
     }
     if (hours >= 24) hours -= 24;
     PrintTime();
-    last_diff = millis() - update_timestamp - 1000;
-    return retval;
 }
 
 
@@ -3009,6 +2975,7 @@ void DrawTime(int r, int g, int b, int hueMode)
 
     DrawDigit(Digit3, LEDS_PER_SEGMENT, r, g, b, mins / 10, hueMode); //Draw the first digit of the minute
     DrawDigit(Digit4, LEDS_PER_SEGMENT, r, g, b, mins - ((mins / 10) * 10), hueMode); //Draw the second digit of the minute
+    update_time_display = false;
 }
 
 void dDHelper(int offset, int seg, int segmentLedCount, int hueMode, CRGB rgb = CRGB(0, 0, 0) )
